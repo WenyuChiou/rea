@@ -770,6 +770,21 @@ const evaluateObject = (
   };
   for (const property of node.properties) {
     if (t.isSpreadElement(property)) {
+      const nested = nestedContext(context);
+      let source = evaluateExpression(property.argument, nested);
+      if (!isCompletePrimitiveObject(source)) {
+        // Spreads copy primitive slots at construction, not when the result
+        // is later read. Capture the spread itself: its argument is not an
+        // independently ordered initializer in the capture model.
+        const captured = captureContextAt(property, nested);
+        if (captured !== undefined)
+          source = evaluateExpression(property.argument, captured);
+      }
+      if (isCompletePrimitiveObject(source)) {
+        for (const entry of source.properties)
+          propertiesByName.set(entry.name, entry);
+        continue;
+      }
       unknownProperties = true;
       omittedProperties = null;
       invalidateEarlierProperties();
@@ -825,6 +840,18 @@ const evaluateObject = (
         omittedProperties: 0,
       };
 };
+
+// The lattice does not retain property descriptors. A partial object or a
+// non-primitive slot may hide an accessor whose invocation changes other slots;
+// do not selectively copy its apparently known siblings or shared references.
+const isCompletePrimitiveObject = (
+  value: JavaScriptSemanticValue,
+): value is Extract<JavaScriptSemanticValue, { status: "object" }> =>
+  value.status === "object" &&
+  !value.unknownProperties &&
+  value.properties.every(
+    ({ presence, value: slot }) => presence === "present" && isPrimitive(slot),
+  );
 
 const evaluateArray = (
   node: t.ArrayExpression,

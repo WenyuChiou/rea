@@ -368,6 +368,10 @@ Direct return expressions, including expression-bodied arrows, are evaluated
 through an execution-free value lattice. Literal object fields and direct
 return sites are represented in the result. Calls, dynamic spreads, computed
 keys, and parser recovery remain partial or unknown.
+Object spreads preserve values from complete local objects whose own slots are
+all bounded primitives, including source-order overwrites. Sources with accessors,
+unknown coverage, or non-primitive slots remain conservative; this does not
+establish general object-spread or runtime equivalence.
 Rebound values are evaluated at their read position: saving an incoming parameter
 before a later assignment preserves caller-dependent uncertainty, while a proven
 preceding assignment can supply a constant. Unresolved ordering remains unknown.
