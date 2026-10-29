@@ -2,6 +2,7 @@ import { Errors } from "incur";
 import { z } from "zod";
 
 import { projectInputIssues } from "../domain/inputIssueProjection.js";
+import { encodeMarkdownTableCell } from "./cliOutputFormatter.js";
 import type { CliInstance } from "./types.js";
 import { visitRegisteredCommands } from "./visitRegisteredCommands.js";
 
@@ -26,14 +27,30 @@ const isAdbSelector = (command: string, field: string): boolean =>
 export const presentCliArgumentErrors = (cli: CliInstance): void => {
   visitRegisteredCommands(cli, (command, path) => {
     command.middleware = [
-      async (_context, next) => {
+      async (context, next) => {
         try {
           await next();
         } catch (cause: unknown) {
           if (!(cause instanceof Errors.ValidationError)) throw cause;
+          const fields = adbSelectorConstraints(path, cause);
           const failure = new Errors.ValidationError({
             message: ARGUMENT_GUIDANCE,
-            fieldErrors: adbSelectorConstraints(path, cause),
+            // Incur renders these fields in a table before the command result
+            // formatter runs. Escape only the Markdown presentation, leaving
+            // the structured values unchanged for every other format.
+            fieldErrors:
+              context.format === "md"
+                ? fields.map((field) => ({
+                    ...field,
+                    ...(field.code === undefined
+                      ? {}
+                      : { code: encodeMarkdownTableCell(field.code) }),
+                    path: encodeMarkdownTableCell(field.path),
+                    expected: encodeMarkdownTableCell(field.expected),
+                    received: encodeMarkdownTableCell(field.received),
+                    message: encodeMarkdownTableCell(field.message),
+                  }))
+                : fields,
           });
           // Incur's constructor appends cause.message as display details. Keep
           // the original error separately, without copying it into the message.
