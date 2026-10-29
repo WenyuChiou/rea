@@ -14,6 +14,7 @@ import {
   nativeMachoTargetForFile,
 } from "../../tests/fixtures/nativeCommands.js";
 import { createTestTempDirectory } from "../../tests/fixtures/temporaryDirectory.js";
+import { inspectionImage } from "./NativeMachoInspection.fixture.js";
 
 describe("native dispatch metadata input boundary", () => {
   it("retains canonical argument failures before attempting target inspection", async () => {
@@ -98,9 +99,9 @@ describe("native dispatch metadata input boundary", () => {
 it.each(["inspect_macho", "list_architectures"] as const)(
   "retains unreadable lipo output as an output failure for %s",
   async (operation) => {
-    const root = await createTestTempDirectory("rea-native-lipo-output-");
-    const path = join(root, "fixture");
-    await writeFile(path, "synthetic source");
+    const root = await createTestTempDirectory("rea-macho-lipo-output-");
+    const path = join(root, "fixture.macho");
+    await writeFile(path, inspectionImage());
     const runner = new NativeFixtureRunner({
       lipo: "unrecognized slice record\n",
     });
