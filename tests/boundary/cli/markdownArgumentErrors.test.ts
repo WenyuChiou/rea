@@ -210,3 +210,81 @@ it("redacts Markdown punctuation in validation fields before presentation", asyn
     expect(control.fieldErrors[0].message).toBe(`Value ${secret} is invalid`);
   }
 });
+
+it("retains upstream Markdown literal-cell protections after redaction", async () => {
+  const value = "\t:smile: secret|token # {x}\t";
+  const secret = "secret|token";
+  const cli = Cli.create("literal-validation-fixture", { sync: false });
+  cli.command("inspect", {
+    options: z.object({ ...explicitSensitiveValueOptions }),
+    run: () => {
+      throw new Errors.ValidationError({
+        message: "fixture",
+        fieldErrors: [
+          {
+            code: "invalid_value",
+            missing: false,
+            path: "input",
+            expected: "",
+            received: value,
+            message: `Value ${value} is invalid`,
+          },
+        ],
+      });
+    },
+  });
+  presentCliArgumentErrors(cli);
+  const declared = excludeDeclaredSensitiveArguments(cli);
+  encodeCliArgumentErrors(cli);
+  const original = cli.serve.bind(cli);
+  const run = async (format: string, sensitive: boolean) => {
+    let stdout = "";
+    let exitCode = 0;
+    await declared(
+      [
+        "inspect",
+        ...(sensitive ? ["--sensitive-value", secret] : []),
+        "--format",
+        format,
+      ],
+      {
+        env: {},
+        stdout: (text) => {
+          stdout += text;
+        },
+        exit: (code) => {
+          exitCode = code;
+        },
+      },
+      original,
+    );
+    expect(exitCode).toBe(1);
+    return stdout;
+  };
+  const md = await run("md", false);
+  const redactedMd = await run("md", true);
+  const json = JSON.parse(await run("json", false));
+  const redactedJson = JSON.parse(await run("json", true));
+  expect(md).toContain("&#9;");
+  expect(md).toContain("&#58;smile&#58;");
+  expect(md).toContain("secret\\|token");
+  expect(redactedMd).not.toContain("secret\\|token");
+  const renderer = await createMarkdownRenderer(process.cwd(), {
+    linkify: false,
+  });
+  const text = (node: DefaultTreeAdapterTypes.Node): string =>
+    node.nodeName === "#text" && "value" in node
+      ? node.value
+      : "childNodes" in node
+        ? node.childNodes.map(text).join("")
+        : "";
+  const rendered = text(parseFragment(renderer.render(md)));
+  const redactedRendered = text(parseFragment(renderer.render(redactedMd)));
+  expect(rendered).toContain(value);
+  expect(redactedRendered).not.toContain(secret);
+  expect(redactedRendered).toContain("[REDACTED]");
+  expect(json.fieldErrors[0].received).toBe(value);
+  expect(redactedJson.fieldErrors[0].received).toBe(
+    value.replace(secret, "[REDACTED]"),
+  );
+});
