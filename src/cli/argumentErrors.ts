@@ -27,35 +27,50 @@ const isAdbSelector = (command: string, field: string): boolean =>
 export const presentCliArgumentErrors = (cli: CliInstance): void => {
   visitRegisteredCommands(cli, (command, path) => {
     command.middleware = [
-      async (context, next) => {
+      async (_context, next) => {
         try {
           await next();
         } catch (cause: unknown) {
           if (!(cause instanceof Errors.ValidationError)) throw cause;
-          const fields = adbSelectorConstraints(path, cause);
           const failure = new Errors.ValidationError({
             message: ARGUMENT_GUIDANCE,
-            // Incur renders these fields in a table before the command result
-            // formatter runs. Escape only the Markdown presentation, leaving
-            // the structured values unchanged for every other format.
-            fieldErrors:
-              context.format === "md"
-                ? fields.map((field) => ({
-                    ...field,
-                    ...(field.code === undefined
-                      ? {}
-                      : { code: encodeMarkdownTableCell(field.code) }),
-                    path: encodeMarkdownTableCell(field.path),
-                    expected: encodeMarkdownTableCell(field.expected),
-                    received: encodeMarkdownTableCell(field.received),
-                    message: encodeMarkdownTableCell(field.message),
-                  }))
-                : fields,
+            fieldErrors: adbSelectorConstraints(path, cause),
           });
           // Incur's constructor appends cause.message as display details. Keep
           // the original error separately, without copying it into the message.
           Object.defineProperty(failure, "cause", { value: cause });
           throw failure;
+        }
+      },
+      ...(command.middleware ?? []),
+    ];
+  });
+};
+
+/** Encode only at the final Markdown presentation boundary, after redaction. */
+export const encodeCliArgumentErrors = (cli: CliInstance): void => {
+  visitRegisteredCommands(cli, (command) => {
+    command.middleware = [
+      async (context, next) => {
+        try {
+          await next();
+        } catch (error: unknown) {
+          if (
+            context.format === "md" &&
+            error instanceof Errors.ValidationError
+          ) {
+            error.fieldErrors = error.fieldErrors.map((field) => ({
+              ...field,
+              ...(field.code === undefined
+                ? {}
+                : { code: encodeMarkdownTableCell(field.code) }),
+              path: encodeMarkdownTableCell(field.path),
+              expected: encodeMarkdownTableCell(field.expected),
+              received: encodeMarkdownTableCell(field.received),
+              message: encodeMarkdownTableCell(field.message),
+            }));
+          }
+          throw error;
         }
       },
       ...(command.middleware ?? []),

@@ -1,7 +1,17 @@
+import { Cli, Errors, z } from "incur";
 import { parseFragment, type DefaultTreeAdapterTypes } from "parse5";
 import { estimateTokenCount } from "tokenx";
 import { createMarkdownRenderer, disposeMdItInstance } from "vitepress";
-import { afterAll, expect } from "vitest";
+import { afterAll, expect, it } from "vitest";
+
+import {
+  encodeCliArgumentErrors,
+  presentCliArgumentErrors,
+} from "../../../src/cli/argumentErrors.js";
+import {
+  excludeDeclaredSensitiveArguments,
+  explicitSensitiveValueOptions,
+} from "../../../src/cli/explicitSensitiveArguments.js";
 
 import { cliTest } from "../../support/cli/cliFixture.js";
 
@@ -91,3 +101,112 @@ cliTest(
     expect(renderedCells(doctorMd.stdout)).toContain(doctorMessage);
   },
 );
+
+cliTest(
+  "redacts a pipe-containing declaration before Markdown encoding",
+  async ({ cli }) => {
+    const secret = '"har"|"mitmproxy"';
+    const args = [
+      "inspect-web-network-capture",
+      "/nonexistent/capture.har",
+      "bogus",
+    ];
+    const run = (format: string, declared: boolean) =>
+      cli.run({
+        arguments: [
+          ...args,
+          ...(declared ? ["--sensitive-value", secret] : []),
+          "--format",
+          format,
+        ],
+      });
+    const markdown = await run("md", true);
+    const json = await run("json", true);
+    const control = await run("json", false);
+    expect(markdown.exitCode).toBe(1);
+    expect(json.exitCode).toBe(1);
+    expect(markdown.stderr).toBe("");
+    expect(json.stderr).toBe("");
+    expect(markdown.stdout).not.toContain('"har"\\|"mitmproxy"');
+    const renderer = await createMarkdownRenderer(process.cwd(), {
+      linkify: false,
+    });
+    const rendered = renderer.render(markdown.stdout);
+    expect(rendered).not.toContain(secret);
+    expect(rendered).toContain("[REDACTED]");
+    const message = JSON.parse(json.stdout).fieldErrors[0].message as string;
+    expect(message).not.toContain(secret);
+    expect(message).toContain("[REDACTED]");
+    expect(JSON.parse(control.stdout).fieldErrors[0].message).toContain(secret);
+  },
+);
+
+it("redacts Markdown punctuation in validation fields before presentation", async () => {
+  for (const secret of [
+    "left|right",
+    "*markup*",
+    "left\\right",
+    "<tag>&value",
+  ]) {
+    const cli = Cli.create("sensitive-fixture", { sync: false });
+    cli.command("inspect", {
+      options: z.object({ ...explicitSensitiveValueOptions }),
+      run: () => {
+        throw new Errors.ValidationError({
+          message: "fixture",
+          fieldErrors: [
+            {
+              code: "invalid_value",
+              missing: false,
+              path: "input",
+              expected: "",
+              received: secret,
+              message: `Value ${secret} is invalid`,
+            },
+          ],
+        });
+      },
+    });
+    presentCliArgumentErrors(cli);
+    const declared = excludeDeclaredSensitiveArguments(cli);
+    encodeCliArgumentErrors(cli);
+    const original = cli.serve.bind(cli);
+    const run = async (format: string, sensitive: boolean) => {
+      let stdout = "";
+      let exitCode = 0;
+      await declared(
+        [
+          "inspect",
+          ...(sensitive ? ["--sensitive-value", secret] : []),
+          "--format",
+          format,
+        ],
+        {
+          env: {},
+          stdout: (text) => {
+            stdout += text;
+          },
+          exit: (code) => {
+            exitCode = code;
+          },
+        },
+        original,
+      );
+      expect(exitCode).toBe(1);
+      return stdout;
+    };
+    const md = await run("md", true);
+    const json = JSON.parse(await run("json", true));
+    const control = JSON.parse(await run("json", false));
+    const renderer = await createMarkdownRenderer(process.cwd(), {
+      linkify: false,
+    });
+    expect(md).not.toContain(secret);
+    expect(renderer.render(md)).not.toContain(secret);
+    expect(renderer.render(md)).toContain("[REDACTED]");
+    expect(json.fieldErrors[0].received).toBe("[REDACTED]");
+    expect(json.fieldErrors[0].message).toBe("Value [REDACTED] is invalid");
+    expect(control.fieldErrors[0].received).toBe(secret);
+    expect(control.fieldErrors[0].message).toBe(`Value ${secret} is invalid`);
+  }
+});
